@@ -3,8 +3,8 @@ const { google } = require("googleapis");
 const XLSX = require("xlsx");
 const { Readable } = require("stream");
 
-const FIREBASE_DATABASE_URL = process.env.FIREBASE_DATABASE_URL;
-const DRIVE_FOLDER_ID = process.env.DRIVE_FOLDER_ID;
+const FIREBASE_DATABASE_URL = process.env.FIREBASE_DATABASE_URL || "https://planilhatemporeal-default-rtdb.firebaseio.com";
+const DRIVE_FOLDER_ID = process.env.DRIVE_FOLDER_ID || "1pD_KHF90T237Uh_5HTCUnSkb4nWyOgO9";
 const BACKUP_EMAIL = process.env.BACKUP_EMAIL || "oficinoxbakup@gmail.com";
 
 function parseServiceAccount(name) {
@@ -16,7 +16,6 @@ function parseServiceAccount(name) {
 }
 
 function initFirebase() {
-  if (!FIREBASE_DATABASE_URL) throw new Error("FIREBASE_DATABASE_URL não configurado.");
   if (!admin.apps.length) {
     const serviceAccount = parseServiceAccount("FIREBASE_SERVICE_ACCOUNT");
     admin.initializeApp({

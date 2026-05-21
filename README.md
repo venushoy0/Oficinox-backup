@@ -81,3 +81,19 @@ npm run monthly
 ```
 
 Se as variáveis estiverem certas, ele cria o arquivo no Drive.
+
+
+## Correção rápida de variáveis
+
+Esta versão já tem valores padrão para `FIREBASE_DATABASE_URL`, `DRIVE_FOLDER_ID`, `BACKUP_EMAIL`, `ADMIN_MASTER` e `ALLOWED_ORIGINS`.
+
+No Railway ainda precisam existir principalmente:
+
+- `FIREBASE_SERVICE_ACCOUNT`
+- `GOOGLE_SERVICE_ACCOUNT`
+
+Depois de publicar, teste a URL:
+
+`/env-check`
+
+Ela mostra `true` ou `false` para as variáveis, sem mostrar as chaves.

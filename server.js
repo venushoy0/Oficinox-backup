@@ -94,6 +94,19 @@ function initFirebase() {
 }
 
 function initDrive() {
+  // Preferência: OAuth do usuário dono do Drive (ex.: oficinoxbakup@gmail.com).
+  // Isso evita o erro "Service Accounts do not have storage quota".
+  if (process.env.DRIVE_CLIENT_ID && process.env.DRIVE_CLIENT_SECRET && process.env.DRIVE_REFRESH_TOKEN) {
+    const oauth2 = new google.auth.OAuth2(
+      process.env.DRIVE_CLIENT_ID,
+      process.env.DRIVE_CLIENT_SECRET,
+      process.env.DRIVE_REDIRECT_URI || "https://developers.google.com/oauthplayground"
+    );
+    oauth2.setCredentials({ refresh_token: process.env.DRIVE_REFRESH_TOKEN });
+    return google.drive({ version: "v3", auth: oauth2 });
+  }
+
+  // Fallback: service account. Funciona apenas em Shared Drive/Workspace ou cenários compatíveis.
   const serviceAccount = parseServiceAccount("GOOGLE_SERVICE_ACCOUNT");
   const auth = new google.auth.GoogleAuth({
     credentials: serviceAccount,
@@ -282,7 +295,10 @@ app.get("/env-check", (_, res) => {
     adminMaster: ADMIN_MASTER,
     allowedOrigins: ALLOWED_ORIGINS,
     firebaseServiceAccount: !!process.env.FIREBASE_SERVICE_ACCOUNT,
-    googleServiceAccount: !!process.env.GOOGLE_SERVICE_ACCOUNT
+    googleServiceAccount: !!process.env.GOOGLE_SERVICE_ACCOUNT,
+    driveOAuthClientId: !!process.env.DRIVE_CLIENT_ID,
+    driveOAuthClientSecret: !!process.env.DRIVE_CLIENT_SECRET,
+    driveOAuthRefreshToken: !!process.env.DRIVE_REFRESH_TOKEN
   });
 });
 

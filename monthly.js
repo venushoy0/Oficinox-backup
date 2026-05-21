@@ -8,10 +8,52 @@ const DRIVE_FOLDER_ID = process.env.DRIVE_FOLDER_ID || "1pD_KHF90T237Uh_5HTCUnSk
 const BACKUP_EMAIL = process.env.BACKUP_EMAIL || "oficinoxbakup@gmail.com";
 
 function parseServiceAccount(name) {
-  const raw = process.env[name];
-  if (!raw) throw new Error(`Variável ${name} não configurada.`);
-  const parsed = JSON.parse(raw);
-  if (parsed.private_key) parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
+  const rawOriginal = process.env[name];
+  if (!rawOriginal) throw new Error(`Variável ${name} não configurada.`);
+
+  let raw = String(rawOriginal).trim();
+
+  // Aceita tanto JSON puro quanto linha ENV completa:
+  // FIREBASE_SERVICE_ACCOUNT={...}
+  // GOOGLE_SERVICE_ACCOUNT={...}
+  if (raw.startsWith(`${name}=`)) {
+    raw = raw.slice(`${name}=`.length).trim();
+  }
+
+  // Se por engano vier mais de uma linha no mesmo campo,
+  // usa somente a linha que contém o JSON desta variável.
+  if (raw.includes("
+")) {
+    const linhas = raw.split(/?
+/).map(l => l.trim()).filter(Boolean);
+    const linhaDaVariavel = linhas.find(l => l.startsWith(`${name}={`));
+    const linhaJson = linhaDaVariavel || linhas.find(l => l.startsWith("{"));
+    if (linhaJson) {
+      raw = linhaJson.startsWith(`${name}=`)
+        ? linhaJson.slice(`${name}=`.length).trim()
+        : linhaJson;
+    }
+  }
+
+  // Se ainda houver prefixo/sufixo indevido, tenta ficar só com o objeto JSON.
+  if (!raw.startsWith("{")) {
+    const i = raw.indexOf("{");
+    if (i >= 0) raw = raw.slice(i);
+  }
+  if (raw.startsWith("{")) {
+    const j = raw.lastIndexOf("}");
+    if (j >= 0) raw = raw.slice(0, j + 1);
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`A variável ${name} não está em JSON válido. Deixe somente o JSON dela, começando com { e terminando com }. Detalhe: ${err.message}`);
+  }
+
+  if (parsed.private_key) parsed.private_key = parsed.private_key.replace(/\n/g, "
+");
   return parsed;
 }
 

@@ -97,3 +97,10 @@ Depois de publicar, teste a URL:
 `/env-check`
 
 Ela mostra `true` ou `false` para as variáveis, sem mostrar as chaves.
+
+
+## Versão robusta contra erro de JSON
+
+Esta versão evita o erro `Unexpected non-whitespace character after JSON`.
+
+Ela aceita a variável como JSON puro ou como linha ENV, mas o ideal continua sendo configurar cada variável separada no Railway.

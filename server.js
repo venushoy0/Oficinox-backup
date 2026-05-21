@@ -21,36 +21,24 @@ function parseServiceAccount(name) {
 
   let raw = String(rawOriginal).trim();
 
-  // Aceita tanto JSON puro quanto linha ENV completa:
-  // FIREBASE_SERVICE_ACCOUNT={...}
-  // GOOGLE_SERVICE_ACCOUNT={...}
+  // Aceita valor no formato ENV também: NOME_DA_VARIAVEL={...}
   if (raw.startsWith(`${name}=`)) {
     raw = raw.slice(`${name}=`.length).trim();
   }
 
-  // Se por engano vier mais de uma linha no mesmo campo,
-  // usa somente a linha que contém o JSON desta variável.
-  if (raw.includes("
-")) {
-    const linhas = raw.split(/?
-/).map(l => l.trim()).filter(Boolean);
-    const linhaDaVariavel = linhas.find(l => l.startsWith(`${name}={`));
-    const linhaJson = linhaDaVariavel || linhas.find(l => l.startsWith("{"));
-    if (linhaJson) {
-      raw = linhaJson.startsWith(`${name}=`)
-        ? linhaJson.slice(`${name}=`.length).trim()
-        : linhaJson;
-    }
+  // Se colaram várias linhas por engano, tenta achar a linha correta.
+  if (raw.indexOf("\n") !== -1 || raw.indexOf("\r") !== -1) {
+    const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const exactLine = lines.find(l => l.startsWith(`${name}={`));
+    const jsonLine = lines.find(l => l.startsWith("{"));
+    raw = exactLine ? exactLine.slice(`${name}=`.length).trim() : (jsonLine || raw);
   }
 
-  // Se ainda houver prefixo/sufixo indevido, tenta ficar só com o objeto JSON.
-  if (!raw.startsWith("{")) {
-    const i = raw.indexOf("{");
-    if (i >= 0) raw = raw.slice(i);
-  }
-  if (raw.startsWith("{")) {
-    const j = raw.lastIndexOf("}");
-    if (j >= 0) raw = raw.slice(0, j + 1);
+  // Tenta recortar o primeiro objeto JSON caso tenha texto extra antes/depois.
+  const first = raw.indexOf("{");
+  const last = raw.lastIndexOf("}");
+  if (first >= 0 && last > first) {
+    raw = raw.slice(first, last + 1);
   }
 
   let parsed;
@@ -60,28 +48,14 @@ function parseServiceAccount(name) {
     throw new Error(`A variável ${name} não está em JSON válido. Deixe somente o JSON dela, começando com { e terminando com }. Detalhe: ${err.message}`);
   }
 
-  if (parsed.private_key) parsed.private_key = parsed.private_key.replace(/\n/g, "
-");
+  if (parsed.private_key) {
+    parsed.private_key = parsed.private_key.replace(/\\n/g, "\n");
+  }
   return parsed;
 }
 
 function cod(email) {
   return String(email || "").replace(/\./g, ",");
-}
-
-function safeName(value) {
-  return String(value || "sem_nome")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\w.-]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 80) || "sem_nome";
-}
-
-function nowStamp() {
-  const d = new Date();
-  const p = n => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}`;
 }
 
 function sheetName(name, used) {
@@ -100,6 +74,12 @@ function sheetName(name, used) {
   }
   used.add(final);
   return final;
+}
+
+function nowStamp() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}`;
 }
 
 function initFirebase() {
@@ -218,13 +198,67 @@ async function compartilharArquivo(drive, fileId) {
   }
 }
 
+async function criarWorkbookBackup(planilhaIds, incluirPlanilhas, incluirHistoricos, userLabel) {
+  const db = initFirebase();
+  const metaSnap = await db.ref("planilhas_meta").once("value");
+  const metas = metaSnap.val() || {};
+  const ids = (Array.isArray(planilhaIds) && planilhaIds.length)
+    ? planilhaIds.filter(id => metas[id])
+    : Object.keys(metas);
+
+  if (!ids.length) throw new Error("Nenhuma planilha encontrada para backup.");
+
+  const wb = XLSX.utils.book_new();
+  const used = new Set();
+
+  const resumo = [
+    { Campo: "Destino Drive", Valor: BACKUP_EMAIL },
+    { Campo: "Gerado em", Valor: new Date().toLocaleString("pt-BR") },
+    { Campo: "Gerado por", Valor: userLabel || "automático" },
+    { Campo: "Inclui planilhas atuais", Valor: incluirPlanilhas ? "Sim" : "Não" },
+    { Campo: "Inclui históricos", Valor: incluirHistoricos ? "Sim" : "Não" },
+  ];
+
+  if (incluirPlanilhas) {
+    for (const id of ids) {
+      const meta = metas[id] || {};
+      const dadosSnap = await db.ref(`planilhas_dados/${id}`).once("value");
+      const dados = dadosSnap.val() || {};
+      const linhas = linhasPlanilhaAtual(meta, dados);
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhas), sheetName(`Plan ${meta.nome || id}`, used));
+      resumo.push({ Campo: `Planilha atual: ${meta.nome || id}`, Valor: `${linhas.length} linha(s)` });
+    }
+  }
+
+  if (incluirHistoricos) {
+    for (const id of ids) {
+      const meta = metas[id] || {};
+      const histSnap = await db.ref(`planilhas_arquivadas/${id}`).once("value");
+      const historicos = histSnap.val() || {};
+      const meses = Object.keys(historicos).sort();
+
+      if (!meses.length) {
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{ aviso: "Sem histórico arquivado." }]), sheetName(`Hist ${meta.nome || id}`, used));
+        resumo.push({ Campo: `Histórico: ${meta.nome || id}`, Valor: "Sem registros" });
+      } else {
+        for (const mes of meses) {
+          const linhas = linhasHistorico(historicos[mes]);
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhas), sheetName(`Hist ${meta.nome || id} ${mes}`, used));
+          resumo.push({ Campo: `Histórico: ${meta.nome || id} / ${mes}`, Valor: `${linhas.length} registro(s)` });
+        }
+      }
+    }
+  }
+
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumo), sheetName("Resumo", used));
+  return wb;
+}
+
 const app = express();
 
 app.use(cors({
   origin(origin, callback) {
-    if (!origin || ALLOWED_ORIGINS.length === 0 || ALLOWED_ORIGINS.includes(origin)) {
-      return callback(null, true);
-    }
+    if (!origin || ALLOWED_ORIGINS.length === 0 || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
     return callback(new Error("Origem não permitida pelo CORS."));
   }
 }));
@@ -255,81 +289,21 @@ app.get("/env-check", (_, res) => {
 app.post("/api/backup", async (req, res) => {
   try {
     const db = initFirebase();
-    const drive = initDrive();
     const user = await verificarUsuarioAdmin(req, db);
-
-    if (!DRIVE_FOLDER_ID) {
-      return res.status(500).json({ ok: false, error: "DRIVE_FOLDER_ID não configurado no Railway." });
-    }
 
     const planilhaIds = Array.isArray(req.body.planilhaIds) ? req.body.planilhaIds.filter(Boolean) : [];
     const incluirPlanilhas = !!req.body.incluirPlanilhas;
     const incluirHistoricos = !!req.body.incluirHistoricos;
 
-    if (!planilhaIds.length) {
-      return res.status(400).json({ ok: false, error: "Nenhuma planilha selecionada." });
-    }
-    if (!incluirPlanilhas && !incluirHistoricos) {
-      return res.status(400).json({ ok: false, error: "Selecione planilhas, históricos ou os dois." });
-    }
+    if (!planilhaIds.length) return res.status(400).json({ ok: false, error: "Nenhuma planilha selecionada." });
+    if (!incluirPlanilhas && !incluirHistoricos) return res.status(400).json({ ok: false, error: "Selecione planilhas, históricos ou os dois." });
 
-    const metaSnap = await db.ref("planilhas_meta").once("value");
-    const metas = metaSnap.val() || {};
-    const validIds = planilhaIds.filter(id => metas[id]);
-
-    if (!validIds.length) {
-      return res.status(400).json({ ok: false, error: "As planilhas selecionadas não foram encontradas." });
-    }
-
-    const wb = XLSX.utils.book_new();
-    const used = new Set();
-    const resumo = [
-      { Campo: "Destino Drive", Valor: BACKUP_EMAIL },
-      { Campo: "Gerado em", Valor: new Date().toLocaleString("pt-BR") },
-      { Campo: "Gerado por", Valor: user.email || user.uid },
-      { Campo: "Inclui planilhas atuais", Valor: incluirPlanilhas ? "Sim" : "Não" },
-      { Campo: "Inclui históricos", Valor: incluirHistoricos ? "Sim" : "Não" },
-    ];
-
-    if (incluirPlanilhas) {
-      for (const id of validIds) {
-        const meta = metas[id] || {};
-        const dadosSnap = await db.ref(`planilhas_dados/${id}`).once("value");
-        const dados = dadosSnap.val() || {};
-        const linhas = linhasPlanilhaAtual(meta, dados);
-        const ws = XLSX.utils.json_to_sheet(linhas);
-        XLSX.utils.book_append_sheet(wb, ws, sheetName(`Plan ${meta.nome || id}`, used));
-        resumo.push({ Campo: `Planilha atual: ${meta.nome || id}`, Valor: `${linhas.length} linha(s)` });
-      }
-    }
-
-    if (incluirHistoricos) {
-      for (const id of validIds) {
-        const meta = metas[id] || {};
-        const histSnap = await db.ref(`planilhas_arquivadas/${id}`).once("value");
-        const historicos = histSnap.val() || {};
-        const meses = Object.keys(historicos).sort();
-
-        if (!meses.length) {
-          const ws = XLSX.utils.json_to_sheet([{ aviso: "Sem histórico arquivado." }]);
-          XLSX.utils.book_append_sheet(wb, ws, sheetName(`Hist ${meta.nome || id}`, used));
-          resumo.push({ Campo: `Histórico: ${meta.nome || id}`, Valor: "Sem registros" });
-        } else {
-          for (const mes of meses) {
-            const linhas = linhasHistorico(historicos[mes]);
-            const ws = XLSX.utils.json_to_sheet(linhas);
-            XLSX.utils.book_append_sheet(wb, ws, sheetName(`Hist ${meta.nome || id} ${mes}`, used));
-            resumo.push({ Campo: `Histórico: ${meta.nome || id} / ${mes}`, Valor: `${linhas.length} registro(s)` });
-          }
-        }
-      }
-    }
-
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumo), sheetName("Resumo", used));
-
+    const wb = await criarWorkbookBackup(planilhaIds, incluirPlanilhas, incluirHistoricos, user.email || user.uid);
     const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
-    const filename = `backup_OFICINOX_${nowStamp()}.xlsx`;
-    const file = await uploadBufferDrive(drive, buffer, filename, DRIVE_FOLDER_ID);
+    const fileName = `backup_OFICINOX_${nowStamp()}.xlsx`;
+
+    const drive = initDrive();
+    const file = await uploadBufferDrive(drive, buffer, fileName, DRIVE_FOLDER_ID);
     await compartilharArquivo(drive, file.id);
 
     res.json({
